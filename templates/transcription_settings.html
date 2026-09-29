@@ -1,0 +1,413 @@
+{% import "ui/components.html" as ui %}
+{% set runtime = panel_context.get("asr_runtime", {}) %}
+{% set model_options = panel_context.get("asr_models", ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "turbo"]) %}
+{% set model_statuses = panel_context.get("asr_model_statuses", []) %}
+{% set model_size_labels = panel_context.get("asr_model_size_labels", {}) %}
+{% set selected_model = namespace(installed=false, size_label=model_size_labels.get(settings.asr_model, ""), known=false) %}
+{% for item in model_statuses %}
+  {% if item.model == settings.asr_model %}
+    {% set selected_model.installed = item.installed %}
+    {% set selected_model.size_label = item.size_label if item.installed and item.size_label else model_size_labels.get(item.model, "") %}
+    {% set selected_model.known = true %}
+  {% endif %}
+{% endfor %}
+{% set cuda_available = runtime.get("cuda_available", false) %}
+{% set auto_device = runtime.get("auto_device", "cpu") %}
+{% set compute_types = runtime.get("compute_types", {"cpu": ["int8", "float32", "default"], "cuda": []}) %}
+{% set selected_device = settings.asr_device %}
+{% set selected_resolved_device = auto_device if selected_device == "auto" else selected_device %}
+{% set selected_supported_types = compute_types.get(selected_resolved_device, []) %}
+{% set selected_compute_type = settings.asr_compute_type %}
+{% call ui.section("transcription", "本地语音转写", "调整 faster-whisper 的模型、并发与输出方式。") %}
+    <div class="field asr-model-field" data-asr-model-picker>
+      <label id="asr_model-label" for="asr_model_trigger">语音识别模型</label>
+      <input id="asr_model" name="asr_model" type="hidden" value="{{ settings.asr_model }}">
+      <div class="asr-model-control">
+        <button class="asr-model-trigger" id="asr_model_trigger" type="button"
+                aria-labelledby="asr_model-label asr_model_selected_name"
+                aria-describedby="asr_model-hint"
+                aria-haspopup="listbox" aria-expanded="false"
+                data-asr-model-trigger>
+          <span class="asr-model-trigger-copy">
+            <strong id="asr_model_selected_name" data-asr-selected-name>{{ settings.asr_model }}</strong>
+            <small data-asr-selected-meta>
+              {% if selected_model.known %}
+                {{ "已安装" if selected_model.installed else "未安装" }}{% if selected_model.size_label %} · {{ selected_model.size_label }}{% endif %}
+              {% else %}
+                自定义模型
+              {% endif %}
+            </small>
+          </span>
+          <svg class="icon small asr-model-chevron"><use href="/static/icons.svg#chevron-down"></use></svg>
+        </button>
+
+        <div class="asr-model-menu hidden" data-asr-model-menu role="listbox" aria-label="语音识别模型">
+          {% if panel_context.get("asr_model_status_error") %}
+            <div class="asr-model-menu-error">模型状态读取失败：{{ panel_context.get("asr_model_status_error") }}</div>
+          {% endif %}
+          {% for item in model_statuses %}
+            {% set estimate = model_size_labels.get(item.model, "") %}
+            <div class="asr-model-row{% if settings.asr_model == item.model %} selected{% endif %}"
+                 data-asr-model-row
+                 data-model="{{ item.model }}"
+                 data-installed="{{ 'true' if item.installed else 'false' }}"
+                 data-estimated-size="{{ estimate }}"
+                 role="option"
+                 aria-selected="{{ 'true' if settings.asr_model == item.model else 'false' }}">
+              <button class="asr-model-choice" type="button" data-asr-model-choice>
+                <span class="asr-model-name">{{ item.model }}</span>
+                <span class="asr-model-meta" data-asr-model-meta>
+                  {% if item.installed %}
+                    已安装{% if item.size_label %} · {{ item.size_label }}{% endif %}
+                  {% else %}
+                    未安装{% if estimate %} · {{ estimate }}{% endif %}
+                  {% endif %}
+                </span>
+              </button>
+              <button class="asr-model-action{% if item.installed %} danger{% endif %}" type="button"
+                      data-asr-model-action="{{ 'delete' if item.installed else 'download' }}"
+                      data-model="{{ item.model }}"
+                      title="{{ '删除本地模型' if item.installed else '下载模型' }}">
+                <svg class="icon small"><use href="/static/icons.svg#{{ 'trash-2' if item.installed else 'download' }}"></use></svg>
+                <span>{{ "删除" if item.installed else "下载" }}</span>
+              </button>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="asr-model-task hidden" id="asr-model-task-status" role="status" aria-live="polite">
+        <span data-asr-model-task-message>正在准备模型任务</span>
+        <div class="progress" aria-hidden="true"><span data-asr-model-task-progress></span></div>
+      </div>
+      <span class="field-hint" id="asr_model-hint">默认 small；模型越大通常越准，但下载、内存和推理开销也更高。</span>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="asr_device">推理设备</label>
+        <select class="select" id="asr_device" name="asr_device" aria-describedby="asr_device-hint">
+          <option value="cpu"{% if selected_device == "cpu" %} selected{% endif %}>cpu</option>
+          <option value="cuda"{% if selected_device == "cuda" %} selected{% endif %}{% if not cuda_available and selected_device != "cuda" %} disabled{% endif %}>cuda{% if not cuda_available and selected_device == "cuda" %}（当前保存，环境不可用）{% elif not cuda_available %}（环境不可用）{% endif %}</option>
+          <option value="auto"{% if selected_device == "auto" %} selected{% endif %}>auto（当前 → {{ auto_device }}）</option>
+        </select>
+        <span class="field-hint" id="asr_device-hint">
+          {% if cuda_available %}
+            已检测到 {{ runtime.get("cuda_device_count", 0) }} 个 CUDA 设备；CTranslate2 {{ runtime.get("ctranslate2_version", "") }} 可使用 GPU。
+          {% else %}
+            {% if selected_device == "cuda" %}
+              当前保存的设备仍为 <strong>cuda</strong>，但本次环境不可用：{{ runtime.get("cuda_reason", "未检测到完整 CUDA 运行环境") }}。保存其他设置不会改写该偏好；转写时由运行时自动回退。
+            {% else %}
+              CUDA 已禁用：{{ runtime.get("cuda_reason", "未检测到完整 CUDA 运行环境") }}。auto 将使用 CPU。
+            {% endif %}
+          {% endif %}
+        </span>
+      </div>
+      <div class="field">
+        <label for="asr_compute_type">计算精度</label>
+        <select class="select" id="asr_compute_type" name="asr_compute_type" aria-describedby="asr_compute_type-hint">
+          {% for option in ["int8", "int8_float16", "float16", "float32", "default"] %}
+            <option value="{{ option }}"{% if selected_compute_type == option %} selected{% endif %}{% if option not in selected_supported_types and selected_compute_type != option %} disabled{% endif %}>{{ option }}{% if option not in selected_supported_types and selected_compute_type == option %}（当前保存，环境不可用）{% elif option not in selected_supported_types %}（当前设备不支持）{% endif %}</option>
+          {% endfor %}
+        </select>
+        <span class="field-hint" id="asr_compute_type-hint">{% if selected_compute_type not in selected_supported_types %}当前保存值 <strong>{{ selected_compute_type }}</strong> 在本次检测环境中不可用；保存其他设置时仍会保留该值。{% else %}按当前设备显示 CTranslate2 支持的计算精度。{% endif %}</span>
+      </div>
+    </div>
+    <div class="field-row">
+      {{ ui.field("asr_cpu_threads", "每个模型 CPU 线程", settings.asr_cpu_threads, type="number", min="1", max="64", step="1") }}
+      {{ ui.field("asr_num_workers", "模型 Worker 数", settings.asr_num_workers, type="number", min="1", max="16", step="1") }}
+    </div>
+    <div class="field-row">
+      {{ ui.field("asr_max_concurrent_tasks", "同时转写课次数", settings.asr_max_concurrent_tasks, type="number", min="1", max="8", step="1") }}
+      {{ ui.field("asr_batch_size", "单课批量大小", settings.asr_batch_size, type="number", min="1", max="32", step="1") }}
+    </div>
+    {{ ui.field("audio_prefetch_queue_size", "音频预取队列", settings.audio_prefetch_queue_size, type="number", min="1", max="8", step="1") }}
+    {{ ui.checkbox("asr_use_batched", "启用 BatchedInferencePipeline 批量推理", settings.asr_use_batched) }}
+    {{ ui.checkbox("asr_simplified_chinese", "中文转写自动转换为简体", settings.asr_simplified_chinese) }}
+{% endcall %}
+
+<style>
+.asr-model-control { position: relative; }
+.asr-model-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 7px 11px 7px 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.asr-model-trigger:hover,
+.asr-model-trigger[aria-expanded="true"] { border-color: var(--primary); }
+.asr-model-trigger-copy { display: grid; min-width: 0; gap: 1px; }
+.asr-model-trigger-copy strong { overflow: hidden; font-size: var(--font-sm); text-overflow: ellipsis; white-space: nowrap; }
+.asr-model-trigger-copy small { color: var(--text-muted); font-size: var(--font-xs); }
+.asr-model-chevron { flex: 0 0 auto; color: var(--text-muted); transition: transform .15s ease; }
+.asr-model-trigger[aria-expanded="true"] .asr-model-chevron { transform: rotate(180deg); }
+.asr-model-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  overflow: auto;
+  max-height: 360px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 5px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, .14);
+}
+.asr-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 3px;
+}
+.asr-model-row:hover { background: var(--surface-hover); }
+.asr-model-row.selected { background: var(--primary-soft); }
+.asr-model-choice {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 7px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.asr-model-name { color: var(--text); font-size: var(--font-sm); font-weight: 680; }
+.asr-model-meta { color: var(--text-muted); font-size: var(--font-xs); }
+.asr-model-row.selected .asr-model-name { color: var(--primary); }
+.asr-model-action {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--primary);
+  padding: 5px 8px;
+  font-size: var(--font-xs);
+  font-weight: 650;
+  cursor: pointer;
+}
+.asr-model-action:hover { background: var(--primary-soft); }
+.asr-model-action.danger { color: var(--danger); }
+.asr-model-action.danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.asr-model-action:disabled { opacity: .55; cursor: default; }
+.asr-model-menu-error { padding: 8px 10px; color: var(--danger); font-size: var(--font-xs); }
+.asr-model-task { display: grid; gap: 6px; color: var(--text-soft); font-size: var(--font-xs); }
+.asr-model-task.error { color: var(--danger); }
+.asr-model-task.success { color: var(--text-soft); }
+.asr-model-task .progress { height: 4px; }
+@media (max-width: 640px) {
+  .asr-model-action span { display: none; }
+  .asr-model-action { width: 32px; justify-content: center; padding: 5px; }
+}
+</style>
+<script>
+(() => {
+  const picker = document.querySelector('[data-asr-model-picker]');
+  if (!picker || picker.dataset.bound === 'true') return;
+  picker.dataset.bound = 'true';
+
+  const input = picker.querySelector('#asr_model');
+  const trigger = picker.querySelector('[data-asr-model-trigger]');
+  const menu = picker.querySelector('[data-asr-model-menu]');
+  const selectedName = picker.querySelector('[data-asr-selected-name]');
+  const selectedMeta = picker.querySelector('[data-asr-selected-meta]');
+  const taskBox = picker.querySelector('#asr-model-task-status');
+  const taskMessage = picker.querySelector('[data-asr-model-task-message]');
+  const taskProgress = picker.querySelector('[data-asr-model-task-progress]');
+  if (!input || !trigger || !menu || !selectedName || !selectedMeta) return;
+
+  const pageRuntime = window.FuckClassroomPage?.current?.();
+  const pageSignal = pageRuntime?.signal;
+  const listenerOptions = pageSignal ? { signal: pageSignal } : undefined;
+  const rows = () => Array.from(menu.querySelectorAll('[data-asr-model-row]'));
+  const actions = () => Array.from(menu.querySelectorAll('[data-asr-model-action]'));
+  const sleep = pageRuntime?.sleep
+    ? (ms) => pageRuntime.sleep(ms)
+    : (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
+  const schedule = pageRuntime?.setTimeout
+    ? (callback, ms) => pageRuntime.setTimeout(callback, ms)
+    : (callback, ms) => window.setTimeout(callback, ms);
+  const disposed = () => Boolean(pageSignal?.aborted || !picker.isConnected);
+
+  const setOpen = (open) => {
+    trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    menu.classList.toggle('hidden', !open);
+  };
+
+  const rowMeta = (row) => row?.querySelector('[data-asr-model-meta]')?.textContent?.trim() || '自定义模型';
+
+  const selectRow = (row) => {
+    if (!row) return;
+    input.value = row.dataset.model || '';
+    selectedName.textContent = input.value;
+    selectedMeta.textContent = rowMeta(row);
+    rows().forEach(item => {
+      const selected = item === row;
+      item.classList.toggle('selected', selected);
+      item.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+    setOpen(false);
+  };
+
+  const renderRowState = (row, installed) => {
+    if (!row) return;
+    row.dataset.installed = installed ? 'true' : 'false';
+    const estimate = row.dataset.estimatedSize || '';
+    const meta = row.querySelector('[data-asr-model-meta]');
+    if (meta) meta.textContent = (installed ? '已安装' : '未安装') + (estimate ? ' · ' + estimate : '');
+
+    const action = row.querySelector('[data-asr-model-action]');
+    if (action) {
+      action.dataset.asrModelAction = installed ? 'delete' : 'download';
+      action.classList.toggle('danger', installed);
+      action.title = installed ? '删除本地模型' : '下载模型';
+      const use = action.querySelector('use');
+      if (use) use.setAttribute('href', installed ? '/static/icons.svg#trash-2' : '/static/icons.svg#download');
+      const label = action.querySelector('span');
+      if (label) label.textContent = installed ? '删除' : '下载';
+    }
+
+    if (input.value === row.dataset.model) selectedMeta.textContent = rowMeta(row);
+  };
+
+  const showTask = (message, percent = 4, state = '') => {
+    if (!taskBox || !taskMessage || !taskProgress) return;
+    taskBox.classList.remove('hidden', 'error', 'success');
+    if (state) taskBox.classList.add(state);
+    taskMessage.textContent = message;
+    taskProgress.style.width = Math.max(0, Math.min(100, Number(percent) || 0)) + '%';
+  };
+
+  const runAction = async (button) => {
+    const model = button.dataset.model || '';
+    const action = button.dataset.asrModelAction || '';
+    if (!model || !['download', 'delete'].includes(action)) return;
+    if (action === 'delete' && !window.confirm('确认删除本地语音模型 ' + model + '？')) return;
+
+    setOpen(false);
+    actions().forEach(item => { item.disabled = true; });
+    showTask(action === 'download' ? '正在准备下载 ' + model : '正在删除 ' + model, 4);
+
+    try {
+      const response = await fetch(
+        '/settings/transcription/models/' + encodeURIComponent(model) + '/' + action,
+        {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          signal: pageSignal,
+        },
+      );
+      if (!response.ok) {
+        let message = action === 'download' ? '模型下载失败' : '模型删除失败';
+        try {
+          const payload = await response.json();
+          message = payload.detail || payload.error || message;
+        } catch {}
+        throw new Error(message);
+      }
+
+      const started = await response.json();
+      if (!started.status_url) throw new Error('模型任务没有返回状态地址');
+
+      while (!disposed()) {
+        const taskResponse = await fetch(started.status_url, {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+          signal: pageSignal,
+        });
+        if (!taskResponse.ok) throw new Error('读取模型任务进度失败');
+        const task = await taskResponse.json();
+        showTask(task.error || task.message || '模型任务正在进行', task.progress || 0);
+
+        if (task.status === 'failed') throw new Error(task.error || '模型任务失败');
+        if (task.status === 'cancelled') throw new Error('模型任务已取消');
+        if (task.status === 'succeeded') {
+          const row = button.closest('[data-asr-model-row]');
+          renderRowState(row, action === 'download');
+          showTask(action === 'download' ? model + ' 下载完成' : model + ' 已删除', 100, 'success');
+          schedule(() => taskBox?.classList.add('hidden'), 1400);
+          return;
+        }
+        await sleep(600);
+      }
+    } catch (error) {
+      if (disposed() || error?.name === 'AbortError') return;
+      showTask(error?.message || '模型任务失败', 100, 'error');
+    } finally {
+      if (!disposed()) actions().forEach(item => { item.disabled = false; });
+    }
+  };
+
+  trigger.addEventListener('click', () => {
+    setOpen(trigger.getAttribute('aria-expanded') !== 'true');
+  });
+
+  rows().forEach(row => {
+    row.querySelector('[data-asr-model-choice]')?.addEventListener('click', () => selectRow(row));
+    row.querySelector('[data-asr-model-action]')?.addEventListener('click', event => {
+      event.stopPropagation();
+      runAction(event.currentTarget);
+    });
+  });
+
+  document.addEventListener('click', event => {
+    if (!picker.contains(event.target)) setOpen(false);
+  }, listenerOptions);
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') setOpen(false);
+  }, listenerOptions);
+})();
+
+(() => {
+  const device = document.getElementById('asr_device');
+  const compute = document.getElementById('asr_compute_type');
+  if (!device || !compute) return;
+
+  const autoDevice = {{ auto_device | tojson }};
+  const support = {{ compute_types | tojson }};
+  const cudaAvailable = {{ cuda_available | tojson }};
+
+  const refreshComputeTypes = () => {
+    const resolved = device.value === 'auto' ? autoDevice : device.value;
+    const allowed = new Set(support[resolved] || []);
+    let selectedAllowed = false;
+
+    for (const option of compute.options) {
+      const enabled = allowed.has(option.value);
+      option.disabled = !enabled;
+      if (option.selected && enabled) selectedAllowed = true;
+    }
+
+    if (!selectedAllowed) {
+      const preferred = Array.from(compute.options).find(
+        option => !option.disabled && option.value === 'int8'
+      ) || Array.from(compute.options).find(option => !option.disabled);
+      if (preferred) preferred.selected = true;
+    }
+  };
+
+  device.addEventListener('change', () => {
+    if (!cudaAvailable) {
+      const cudaOption = Array.from(device.options).find(option => option.value === 'cuda');
+      if (cudaOption) cudaOption.disabled = device.value !== 'cuda';
+    }
+    refreshComputeTypes();
+  });
+})();
+</script>
