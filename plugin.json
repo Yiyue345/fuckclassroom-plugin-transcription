@@ -1,0 +1,36 @@
+{
+  "id": "transcription",
+  "name": "本地语音转写",
+  "version": "0.1.0",
+  "api_version": 1,
+  "app_requires": ">=0.1,<0.3",
+  "description": "使用 faster-whisper 从课程录像生成本地转写，并提供模型管理与运行环境检测。",
+  "requires": [
+    "processing"
+  ],
+  "python_requires": [
+    {
+      "requirement": "faster-whisper>=1.1",
+      "import": "faster_whisper",
+      "label": "faster-whisper",
+      "optional": false
+    },
+    {
+      "requirement": "huggingface-hub>=0.32",
+      "import": "huggingface_hub",
+      "label": "Hugging Face Hub",
+      "optional": false
+    },
+    {
+      "requirement": "opencc-python-reimplemented>=0.1.7",
+      "import": "opencc",
+      "label": "OpenCC",
+      "optional": false
+    }
+  ],
+  "execution": "in_process",
+  "entry": "plugin.py",
+  "route_prefix": null,
+  "rpc_api_version": null,
+  "rpc_permissions": []
+}

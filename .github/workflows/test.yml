@@ -1,0 +1,56 @@
+name: Test plugin
+
+on:
+  push:
+    branches: ["main", "plugin-management"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation dependencies
+        run: python -m pip install packaging
+      - name: Validate manifest
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          from packaging.specifiers import SpecifierSet
+          from packaging.version import Version
+          data = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
+          assert data["id"] == "transcription"
+          assert data["api_version"] == 1
+          assert data["requires"] == ["processing"]
+          assert data["execution"] == "in_process"
+          assert data["route_prefix"] is None
+          assert data["rpc_api_version"] is None
+          assert data["rpc_permissions"] == []
+          assert [item["import"] for item in data["python_requires"]] == [
+              "faster_whisper", "huggingface_hub", "opencc"
+          ]
+          assert SpecifierSet(data["app_requires"]).contains(Version("0.2.0.dev0"), prereleases=True)
+      - name: Check Python syntax
+        run: python -m compileall -q __init__.py plugin.py engine.py environment.py errors.py routes.py services.py worker.py scripts/build_registry_artifact.py
+      - name: Check external Worker imports
+        shell: bash
+        run: |
+          if grep -REn 'from \.\.(\.|[A-Za-z_])' --include='*.py' . --exclude-dir=.git; then
+            echo "External plugin must use fuckclassroom.* for host imports" >&2
+            exit 1
+          fi
+          if grep -REn 'fuckclassroom\.plugins\.transcription' --include='*.py' . --exclude-dir=.git; then
+            echo "Worker must load transcription implementation from this plugin package" >&2
+            exit 1
+          fi
+          grep -F 'from .engine import LocalTranscriptionService' worker.py
+      - name: Smoke-build Registry v1 artifact
+        shell: bash
+        run: |
+          python scripts/build_registry_artifact.py 0.1.0-ci.0
+          sha256sum -c transcription-0.1.0-ci.0.zip.sha256
