@@ -50,6 +50,8 @@
             <div class="asr-model-row{% if settings.asr_model == item.model %} selected{% endif %}"
                  data-asr-model-row
                  data-model="{{ item.model }}"
+                 data-repo-id="{{ item.get('repo_id') or item.model }}"
+                 data-aliases="{{ item.get('aliases', [])|join(',') if item.get('aliases') else item.model }}"
                  data-installed="{{ 'true' if item.installed else 'false' }}"
                  data-estimated-size="{{ estimate }}"
                  role="option"
@@ -285,6 +287,25 @@
     if (input.value === row.dataset.model) selectedMeta.textContent = rowMeta(row);
   };
 
+  const renderRepoState = (sourceRow, installed) => {
+    if (!sourceRow) return;
+    const repoId = sourceRow.dataset.repoId || '';
+    const aliases = new Set(
+      String(sourceRow.dataset.aliases || sourceRow.dataset.model || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean)
+    );
+
+    rows().forEach(row => {
+      const sameRepo = repoId && row.dataset.repoId === repoId;
+      const sameAliasGroup = aliases.has(row.dataset.model || '');
+      if (sameRepo || sameAliasGroup || row === sourceRow) {
+        renderRowState(row, installed);
+      }
+    });
+  };
+
   const showTask = (message, percent = 4, state = '') => {
     if (!taskBox || !taskMessage || !taskProgress) return;
     taskBox.classList.remove('hidden', 'error', 'success');
@@ -338,7 +359,7 @@
         if (task.status === 'cancelled') throw new Error('模型任务已取消');
         if (task.status === 'succeeded') {
           const row = button.closest('[data-asr-model-row]');
-          renderRowState(row, action === 'download');
+          renderRepoState(row, action === 'download');
           showTask(action === 'download' ? model + ' 下载完成' : model + ' 已删除', 100, 'success');
           schedule(() => taskBox?.classList.add('hidden'), 1400);
           return;
