@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 
 _COMPUTE_TYPE_ORDER = ("int8", "int8_float16", "float16", "float32", "default")
@@ -108,6 +109,139 @@ def detect_asr_runtime() -> AsrRuntimeCapabilities:
     )
 
 
+# Guidance focuses on multilingual/Chinese lecture transcription rather than
+# raw inference speed. These are qualitative recommendations, not benchmark
+# accuracy percentages; actual performance depends on the recording.
+_MODEL_GUIDANCE: dict[str, dict[str, str]] = {
+    "large-v3-turbo": {
+        "badge": "首选推荐",
+        "tone": "recommended",
+        "description": "中文课堂优先：准确率与速度较均衡，日常转写推荐。",
+    },
+    "large-v3": {
+        "badge": "准确率优先",
+        "tone": "recommended",
+        "description": "适合术语多、要求更高的录音；显存占用和耗时更大。",
+    },
+    "turbo": {
+        "badge": "首选推荐",
+        "tone": "recommended",
+        "description": "中文课堂优先：准确率与速度较均衡，日常转写推荐。",
+    },
+    "large": {
+        "badge": "准确率优先",
+        "tone": "recommended",
+        "description": "适合术语多、要求更高的录音；显存占用和耗时更大。",
+    },
+    "medium": {
+        "badge": "资源折中",
+        "tone": "balanced",
+        "description": "硬件不适合大模型时选用，中文识别通常优于更小模型。",
+    },
+    "small": {
+        "badge": "精度有限",
+        "tone": "caution",
+        "description": "安静、清晰语音尚可；课堂噪声和专业术语容易误识。",
+    },
+    "base": {
+        "badge": "不建议课堂使用",
+        "tone": "caution",
+        "description": "偏重运行速度，专业词汇和较长课堂录音的准确率有限。",
+    },
+    "tiny": {
+        "badge": "不建议课堂使用",
+        "tone": "caution",
+        "description": "仅适合快速测试；中文长录音和复杂环境下漏字风险较高。",
+    },
+    "large-v1": {
+        "badge": "旧版模型",
+        "tone": "neutral",
+        "description": "较早的大模型；新选择建议优先考虑 large-v3 系列。",
+    },
+    "large-v2": {
+        "badge": "旧版模型",
+        "tone": "neutral",
+        "description": "较早的大模型；新选择建议优先考虑 large-v3 系列。",
+    },
+}
+
+
+def asr_model_guidance(model_name: str) -> dict[str, str]:
+    """Describe a model's suitability for multilingual classroom recordings."""
+    if model_name.endswith(".en"):
+        return {
+            "badge": "仅英语",
+            "tone": "caution",
+            "description": "专门用于英文识别，不适用于中文课堂语音。",
+        }
+    return dict(_MODEL_GUIDANCE.get(model_name, {}))
+
+
+# Fallback mappings used when faster-whisper is temporarily unavailable.
+# The installed faster-whisper _MODELS mapping remains the source of truth.
+_KNOWN_MODEL_ALIASES = {
+    "turbo": "large-v3-turbo",
+    "large": "large-v3",
+}
+
+
+def all_asr_model_names() -> tuple[str, ...]:
+    """Every runtime-supported name, including legacy aliases."""
+    try:
+        from faster_whisper.utils import _MODELS as model_repositories
+    except ImportError:
+        return _FALLBACK_MODEL_ORDER
+    return tuple(str(name) for name in model_repositories)
+
+
+def order_asr_models(
+    model_names: tuple[str, ...] | list[str],
+    model_repositories: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Show one choice per repository, favoring explicit model version names."""
+    names = tuple(dict.fromkeys(model_names))
+    # Prefer explicit names, while older faster-whisper versions that only
+    # expose an alias still receive the same top recommendation.
+    primary = "large-v3-turbo" if "large-v3-turbo" in names else "turbo"
+    accurate = "large-v3" if "large-v3" in names else "large"
+    priority = (primary, accurate, "medium")
+    ordered = tuple(name for name in priority if name in names) + tuple(
+        name for name in names if name not in priority
+    )
+    visible: list[str] = []
+    seen_repositories: set[str] = set()
+    for name in ordered:
+        if model_repositories is None:
+            repository = _KNOWN_MODEL_ALIASES.get(name, name)
+        else:
+            repository = str(model_repositories.get(name, name))
+        if repository in seen_repositories:
+            continue
+        seen_repositories.add(repository)
+        visible.append(name)
+    return tuple(visible)
+
+
+def asr_model_aliases() -> dict[str, str]:
+    """Map hidden aliases onto their visible choice without changing the model."""
+    try:
+        from faster_whisper.utils import _MODELS as model_repositories
+    except ImportError:
+        model_repositories = {
+            name: _KNOWN_MODEL_ALIASES.get(name, name)
+            for name in _FALLBACK_MODEL_ORDER
+        }
+    names = tuple(str(name) for name in model_repositories)
+    visible = order_asr_models(names, model_repositories)
+    canonical_by_repo = {
+        str(model_repositories[name]): name for name in visible
+    }
+    return {
+        name: canonical_by_repo[str(repo)]
+        for name, repo in model_repositories.items()
+        if str(repo) in canonical_by_repo and canonical_by_repo[str(repo)] != name
+    }
+
 _MODEL_DOWNLOAD_SIZE_LABELS = {
     "tiny": "约 70 MB",
     "tiny.en": "约 70 MB",
@@ -120,6 +254,7 @@ _MODEL_DOWNLOAD_SIZE_LABELS = {
     "large-v1": "约 2.8 GB",
     "large-v2": "约 2.8 GB",
     "large-v3": "约 2.8 GB",
+    "large": "约 2.8 GB",
     "large-v3-turbo": "约 1.6 GB",
     "turbo": "约 1.6 GB",
 }
@@ -130,6 +265,11 @@ def build_settings_context(services, request) -> dict[str, object]:
         "asr_runtime": detect_asr_runtime().to_context(),
         "asr_models": list(available_asr_models()),
         "asr_model_size_labels": dict(_MODEL_DOWNLOAD_SIZE_LABELS),
+        "asr_model_guidance": {
+            name: asr_model_guidance(name)
+            for name in available_asr_models()
+        },
+        "asr_model_aliases": asr_model_aliases(),
     }
     context.update(build_model_settings_context(services, request))
     return context
@@ -198,12 +338,12 @@ def available_asr_models() -> tuple[str, ...]:
     try:
         from faster_whisper.utils import _MODELS as model_repositories
     except Exception:
-        return _FALLBACK_MODEL_ORDER
+        return order_asr_models(_FALLBACK_MODEL_ORDER)
 
     names = {str(name).strip() for name in model_repositories if str(name).strip()}
     ordered = [name for name in _FALLBACK_MODEL_ORDER if name in names]
     ordered.extend(sorted(names.difference(ordered)))
-    return tuple(ordered) or _FALLBACK_MODEL_ORDER
+    return order_asr_models(tuple(ordered) or _FALLBACK_MODEL_ORDER, model_repositories)
 
 
 def resolve_auto_device() -> str:

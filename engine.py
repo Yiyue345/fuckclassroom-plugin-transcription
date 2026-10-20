@@ -604,10 +604,10 @@ class LocalTranscriptionService:
         return str(repo_id)
 
     def _model_aliases_for_repo(self, repo_id: str) -> tuple[str, ...]:
-        from .environment import available_asr_models
+        from .environment import all_asr_model_names
 
         aliases: list[str] = []
-        for candidate in available_asr_models():
+        for candidate in all_asr_model_names():
             try:
                 if self._model_repo_id(candidate) == repo_id:
                     aliases.append(candidate)
@@ -627,9 +627,11 @@ class LocalTranscriptionService:
     @staticmethod
     def _validate_managed_model(model_name: str) -> str:
         configured = str(model_name or "").strip()
-        from .environment import available_asr_models
+        from .environment import all_asr_model_names
 
-        if configured not in set(available_asr_models()):
+        # Keep accepting older saved aliases even when the UI shows only
+        # one canonical choice for each Hugging Face repository.
+        if configured not in set(all_asr_model_names()):
             raise LocalTranscriptionError(f"模型管理不支持该 faster-whisper 模型：{configured}")
         return configured
 

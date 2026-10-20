@@ -3,9 +3,12 @@
 {% set model_options = panel_context.get("asr_models", ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "turbo"]) %}
 {% set model_statuses = panel_context.get("asr_model_statuses", []) %}
 {% set model_size_labels = panel_context.get("asr_model_size_labels", {}) %}
-{% set selected_model = namespace(installed=false, size_label=model_size_labels.get(settings.asr_model, ""), known=false) %}
+{% set model_guidance = panel_context.get("asr_model_guidance", {}) %}
+{# Legacy aliases map to the one visible selection for the same repository. #}
+{% set display_model = panel_context.get("asr_model_aliases", {}).get(settings.asr_model, settings.asr_model) %}
+{% set selected_model = namespace(installed=false, size_label=model_size_labels.get(display_model, ""), known=false) %}
 {% for item in model_statuses %}
-  {% if item.model == settings.asr_model %}
+  {% if item.model == display_model %}
     {% set selected_model.installed = item.installed %}
     {% set selected_model.size_label = item.size_label if item.installed and item.size_label else model_size_labels.get(item.model, "") %}
     {% set selected_model.known = true %}
@@ -21,7 +24,7 @@
 {% call ui.section("transcription", "本地语音转写", "调整 faster-whisper 的模型、并发与输出方式。") %}
     <div class="field asr-model-field" data-asr-model-picker>
       <label id="asr_model-label" for="asr_model_trigger">语音识别模型</label>
-      <input id="asr_model" name="asr_model" type="hidden" value="{{ settings.asr_model }}">
+      <input id="asr_model" name="asr_model" type="hidden" value="{{ display_model }}">
       <div class="asr-model-control">
         <button class="asr-model-trigger" id="asr_model_trigger" type="button"
                 aria-labelledby="asr_model-label asr_model_selected_name"
@@ -29,7 +32,7 @@
                 aria-haspopup="listbox" aria-expanded="false"
                 data-asr-model-trigger>
           <span class="asr-model-trigger-copy">
-            <strong id="asr_model_selected_name" data-asr-selected-name>{{ settings.asr_model }}</strong>
+            <strong id="asr_model_selected_name" data-asr-selected-name>{{ display_model }}</strong>
             <small data-asr-selected-meta>
               {% if selected_model.known %}
                 {{ "已安装" if selected_model.installed else "未安装" }}{% if selected_model.size_label %} · {{ selected_model.size_label }}{% endif %}
@@ -47,7 +50,8 @@
           {% endif %}
           {% for item in model_statuses %}
             {% set estimate = model_size_labels.get(item.model, "") %}
-            <div class="asr-model-row{% if settings.asr_model == item.model %} selected{% endif %}"
+            {% set guidance = model_guidance.get(item.model, {}) %}
+            <div class="asr-model-row{% if display_model == item.model %} selected{% endif %}"
                  data-asr-model-row
                  data-model="{{ item.model }}"
                  data-repo-id="{{ item.get('repo_id') or item.model }}"
@@ -55,9 +59,17 @@
                  data-installed="{{ 'true' if item.installed else 'false' }}"
                  data-estimated-size="{{ estimate }}"
                  role="option"
-                 aria-selected="{{ 'true' if settings.asr_model == item.model else 'false' }}">
+                 aria-selected="{{ 'true' if display_model == item.model else 'false' }}">
               <button class="asr-model-choice" type="button" data-asr-model-choice>
-                <span class="asr-model-name">{{ item.model }}</span>
+                <span class="asr-model-name-line">
+                  <span class="asr-model-name">{{ item.model }}</span>
+                  {% if guidance.get("badge") %}
+                    <span class="asr-model-guidance-badge {{ 'is-' ~ guidance.get('tone', 'neutral') }}">{{ guidance.badge }}</span>
+                  {% endif %}
+                </span>
+                {% if guidance.get("description") %}
+                  <span class="asr-model-advice">{{ guidance.description }}</span>
+                {% endif %}
                 <span class="asr-model-meta" data-asr-model-meta>
                   {% if item.installed %}
                     已安装{% if item.size_label %} · {{ item.size_label }}{% endif %}
@@ -82,7 +94,7 @@
         <span data-asr-model-task-message>正在准备模型任务</span>
         <div class="progress" aria-hidden="true"><span data-asr-model-task-progress></span></div>
       </div>
-      <span class="field-hint" id="asr_model-hint">默认 small；模型越大通常越准，但下载、内存和推理开销也更高。</span>
+      <span class="field-hint" id="asr_model-hint">中文课堂优先 large-v3-turbo（速度与准确率兼顾），高精度选 large-v3；small / base / tiny 仅建议试用。选择只影响后续任务，不会自动下载模型。</span>
     </div>
     <div class="field-row">
       <div class="field">
@@ -186,7 +198,13 @@
   text-align: left;
   cursor: pointer;
 }
+.asr-model-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; }
 .asr-model-name { color: var(--text); font-size: var(--font-sm); font-weight: 680; }
+.asr-model-guidance-badge { display: inline-flex; align-items: center; border-radius: 5px; padding: 2px 6px; background: var(--surface-subtle); color: var(--text-muted); font-size: 10px; font-weight: 650; }
+.asr-model-guidance-badge.is-recommended { background: var(--green-soft); color: var(--green); }
+.asr-model-guidance-badge.is-balanced { background: var(--primary-soft); color: var(--primary); }
+.asr-model-guidance-badge.is-caution { background: var(--amber-soft); color: var(--amber); }
+.asr-model-advice { color: var(--text-soft); font-size: 11px; line-height: 1.5; white-space: normal; }
 .asr-model-meta { color: var(--text-muted); font-size: var(--font-xs); }
 .asr-model-row.selected .asr-model-name { color: var(--primary); }
 .asr-model-action {
