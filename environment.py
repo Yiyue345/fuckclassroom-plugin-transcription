@@ -167,7 +167,7 @@ _MODEL_GUIDANCE: dict[str, dict[str, str]] = {
 
 def asr_model_guidance(model_name: str) -> dict[str, str]:
     """Describe a model's suitability for multilingual classroom recordings."""
-    if model_name.endswith(".en") or model_name.startswith("distil-") and model_name.endswith(".en"):
+    if model_name.endswith(".en"):
         return {
             "badge": "仅英语",
             "tone": "caution",
@@ -198,6 +198,7 @@ _MODEL_DOWNLOAD_SIZE_LABELS = {
     "large-v1": "约 2.8 GB",
     "large-v2": "约 2.8 GB",
     "large-v3": "约 2.8 GB",
+    "large": "约 2.8 GB",
     "large-v3-turbo": "约 1.6 GB",
     "turbo": "约 1.6 GB",
 }
