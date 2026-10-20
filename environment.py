@@ -123,6 +123,16 @@ _MODEL_GUIDANCE: dict[str, dict[str, str]] = {
         "tone": "recommended",
         "description": "适合术语多、要求更高的录音；显存占用和耗时更大。",
     },
+    "turbo": {
+        "badge": "首选推荐",
+        "tone": "recommended",
+        "description": "中文课堂优先：准确率与速度较均衡，日常转写推荐。",
+    },
+    "large": {
+        "badge": "准确率优先",
+        "tone": "recommended",
+        "description": "适合术语多、要求更高的录音；显存占用和耗时更大。",
+    },
     "medium": {
         "badge": "资源折中",
         "tone": "balanced",
@@ -190,8 +200,11 @@ def order_asr_models(
 ) -> tuple[str, ...]:
     """Show one choice per repository, favoring explicit model version names."""
     names = tuple(dict.fromkeys(model_names))
-    # The preferred name is evaluated first when aliases share the same repo.
-    priority = ("large-v3-turbo", "large-v3", "medium")
+    # Prefer explicit names, while older faster-whisper versions that only
+    # expose an alias still receive the same top recommendation.
+    primary = "large-v3-turbo" if "large-v3-turbo" in names else "turbo"
+    accurate = "large-v3" if "large-v3" in names else "large"
+    priority = (primary, accurate, "medium")
     ordered = tuple(name for name in priority if name in names) + tuple(
         name for name in names if name not in priority
     )
