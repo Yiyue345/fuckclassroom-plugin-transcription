@@ -4,9 +4,11 @@
 {% set model_statuses = panel_context.get("asr_model_statuses", []) %}
 {% set model_size_labels = panel_context.get("asr_model_size_labels", {}) %}
 {% set model_guidance = panel_context.get("asr_model_guidance", {}) %}
-{% set selected_model = namespace(installed=false, size_label=model_size_labels.get(settings.asr_model, ""), known=false) %}
+{# Legacy aliases map to the one visible selection for the same repository. #}
+{% set display_model = panel_context.get("asr_model_aliases", {}).get(settings.asr_model, settings.asr_model) %}
+{% set selected_model = namespace(installed=false, size_label=model_size_labels.get(display_model, ""), known=false) %}
 {% for item in model_statuses %}
-  {% if item.model == settings.asr_model %}
+  {% if item.model == display_model %}
     {% set selected_model.installed = item.installed %}
     {% set selected_model.size_label = item.size_label if item.installed and item.size_label else model_size_labels.get(item.model, "") %}
     {% set selected_model.known = true %}
@@ -22,7 +24,7 @@
 {% call ui.section("transcription", "本地语音转写", "调整 faster-whisper 的模型、并发与输出方式。") %}
     <div class="field asr-model-field" data-asr-model-picker>
       <label id="asr_model-label" for="asr_model_trigger">语音识别模型</label>
-      <input id="asr_model" name="asr_model" type="hidden" value="{{ settings.asr_model }}">
+      <input id="asr_model" name="asr_model" type="hidden" value="{{ display_model }}">
       <div class="asr-model-control">
         <button class="asr-model-trigger" id="asr_model_trigger" type="button"
                 aria-labelledby="asr_model-label asr_model_selected_name"
@@ -30,7 +32,7 @@
                 aria-haspopup="listbox" aria-expanded="false"
                 data-asr-model-trigger>
           <span class="asr-model-trigger-copy">
-            <strong id="asr_model_selected_name" data-asr-selected-name>{{ settings.asr_model }}</strong>
+            <strong id="asr_model_selected_name" data-asr-selected-name>{{ display_model }}</strong>
             <small data-asr-selected-meta>
               {% if selected_model.known %}
                 {{ "已安装" if selected_model.installed else "未安装" }}{% if selected_model.size_label %} · {{ selected_model.size_label }}{% endif %}
@@ -49,7 +51,7 @@
           {% for item in model_statuses %}
             {% set estimate = model_size_labels.get(item.model, "") %}
             {% set guidance = model_guidance.get(item.model, {}) %}
-            <div class="asr-model-row{% if settings.asr_model == item.model %} selected{% endif %}"
+            <div class="asr-model-row{% if display_model == item.model %} selected{% endif %}"
                  data-asr-model-row
                  data-model="{{ item.model }}"
                  data-repo-id="{{ item.get('repo_id') or item.model }}"
@@ -57,7 +59,7 @@
                  data-installed="{{ 'true' if item.installed else 'false' }}"
                  data-estimated-size="{{ estimate }}"
                  role="option"
-                 aria-selected="{{ 'true' if settings.asr_model == item.model else 'false' }}">
+                 aria-selected="{{ 'true' if display_model == item.model else 'false' }}">
               <button class="asr-model-choice" type="button" data-asr-model-choice>
                 <span class="asr-model-name-line">
                   <span class="asr-model-name">{{ item.model }}</span>
