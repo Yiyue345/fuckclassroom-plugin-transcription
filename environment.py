@@ -108,6 +108,84 @@ def detect_asr_runtime() -> AsrRuntimeCapabilities:
     )
 
 
+# Guidance focuses on multilingual/Chinese lecture transcription rather than
+# raw inference speed. These are qualitative recommendations, not benchmark
+# accuracy percentages; actual performance depends on the recording.
+_MODEL_GUIDANCE: dict[str, dict[str, str]] = {
+    "large-v3-turbo": {
+        "badge": "首选推荐",
+        "tone": "recommended",
+        "description": "中文课堂优先：准确率与速度较均衡，日常转写推荐。",
+    },
+    "large-v3": {
+        "badge": "准确率优先",
+        "tone": "recommended",
+        "description": "适合术语多、要求更高的录音；显存占用和耗时更大。",
+    },
+    "medium": {
+        "badge": "资源折中",
+        "tone": "balanced",
+        "description": "硬件不适合大模型时选用，中文识别通常优于更小模型。",
+    },
+    "turbo": {
+        "badge": "同款别名",
+        "tone": "alias",
+        "description": "与 large-v3-turbo 共用模型文件，建议优先选择标准名称。",
+    },
+    "small": {
+        "badge": "精度有限",
+        "tone": "caution",
+        "description": "安静、清晰语音尚可；课堂噪声和专业术语容易误识。",
+    },
+    "base": {
+        "badge": "不建议课堂使用",
+        "tone": "caution",
+        "description": "偏重运行速度，专业词汇和较长课堂录音的准确率有限。",
+    },
+    "tiny": {
+        "badge": "不建议课堂使用",
+        "tone": "caution",
+        "description": "仅适合快速测试；中文长录音和复杂环境下漏字风险较高。",
+    },
+    "large-v1": {
+        "badge": "旧版模型",
+        "tone": "neutral",
+        "description": "较早的大模型；新选择建议优先考虑 large-v3 系列。",
+    },
+    "large-v2": {
+        "badge": "旧版模型",
+        "tone": "neutral",
+        "description": "较早的大模型；新选择建议优先考虑 large-v3 系列。",
+    },
+    "large": {
+        "badge": "同款别名",
+        "tone": "alias",
+        "description": "当前 faster-whisper 通常将 large 映射到 large-v3，推荐使用明确版本名。",
+    },
+}
+
+
+def asr_model_guidance(model_name: str) -> dict[str, str]:
+    """Describe a model's suitability for multilingual classroom recordings."""
+    if model_name.endswith(".en") or model_name.startswith("distil-") and model_name.endswith(".en"):
+        return {
+            "badge": "仅英语",
+            "tone": "caution",
+            "description": "专门用于英文识别，不适用于中文课堂语音。",
+        }
+    return dict(_MODEL_GUIDANCE.get(model_name, {}))
+
+
+def order_asr_models(model_names: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Offer the best classroom choices first; retain every supported alias."""
+    names = tuple(dict.fromkeys(model_names))
+    primary = "large-v3-turbo" if "large-v3-turbo" in names else "turbo"
+    priority = (primary, "large-v3", "medium")
+    return tuple(name for name in priority if name in names) + tuple(
+        name for name in names if name not in priority
+    )
+
+
 _MODEL_DOWNLOAD_SIZE_LABELS = {
     "tiny": "约 70 MB",
     "tiny.en": "约 70 MB",
@@ -130,6 +208,10 @@ def build_settings_context(services, request) -> dict[str, object]:
         "asr_runtime": detect_asr_runtime().to_context(),
         "asr_models": list(available_asr_models()),
         "asr_model_size_labels": dict(_MODEL_DOWNLOAD_SIZE_LABELS),
+        "asr_model_guidance": {
+            name: asr_model_guidance(name)
+            for name in available_asr_models()
+        },
     }
     context.update(build_model_settings_context(services, request))
     return context
@@ -198,12 +280,12 @@ def available_asr_models() -> tuple[str, ...]:
     try:
         from faster_whisper.utils import _MODELS as model_repositories
     except Exception:
-        return _FALLBACK_MODEL_ORDER
+        return order_asr_models(_FALLBACK_MODEL_ORDER)
 
     names = {str(name).strip() for name in model_repositories if str(name).strip()}
     ordered = [name for name in _FALLBACK_MODEL_ORDER if name in names]
     ordered.extend(sorted(names.difference(ordered)))
-    return tuple(ordered) or _FALLBACK_MODEL_ORDER
+    return order_asr_models(tuple(ordered) or _FALLBACK_MODEL_ORDER)
 
 
 def resolve_auto_device() -> str:
