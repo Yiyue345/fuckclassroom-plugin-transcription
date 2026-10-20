@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 
 _COMPUTE_TYPE_ORDER = ("int8", "int8_float16", "float16", "float32", "default")
@@ -127,11 +128,6 @@ _MODEL_GUIDANCE: dict[str, dict[str, str]] = {
         "tone": "balanced",
         "description": "硬件不适合大模型时选用，中文识别通常优于更小模型。",
     },
-    "turbo": {
-        "badge": "同款别名",
-        "tone": "alias",
-        "description": "与 large-v3-turbo 共用模型文件，建议优先选择标准名称。",
-    },
     "small": {
         "badge": "精度有限",
         "tone": "caution",
@@ -157,11 +153,6 @@ _MODEL_GUIDANCE: dict[str, dict[str, str]] = {
         "tone": "neutral",
         "description": "较早的大模型；新选择建议优先考虑 large-v3 系列。",
     },
-    "large": {
-        "badge": "同款别名",
-        "tone": "alias",
-        "description": "当前 faster-whisper 通常将 large 映射到 large-v3，推荐使用明确版本名。",
-    },
 }
 
 
@@ -176,15 +167,67 @@ def asr_model_guidance(model_name: str) -> dict[str, str]:
     return dict(_MODEL_GUIDANCE.get(model_name, {}))
 
 
-def order_asr_models(model_names: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-    """Offer the best classroom choices first; retain every supported alias."""
+# Fallback mappings used when faster-whisper is temporarily unavailable.
+# The installed faster-whisper _MODELS mapping remains the source of truth.
+_KNOWN_MODEL_ALIASES = {
+    "turbo": "large-v3-turbo",
+    "large": "large-v3",
+}
+
+
+def all_asr_model_names() -> tuple[str, ...]:
+    """Every runtime-supported name, including legacy aliases."""
+    try:
+        from faster_whisper.utils import _MODELS as model_repositories
+    except ImportError:
+        return _FALLBACK_MODEL_ORDER
+    return tuple(str(name) for name in model_repositories)
+
+
+def order_asr_models(
+    model_names: tuple[str, ...] | list[str],
+    model_repositories: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Show one choice per repository, favoring explicit model version names."""
     names = tuple(dict.fromkeys(model_names))
-    primary = "large-v3-turbo" if "large-v3-turbo" in names else "turbo"
-    priority = (primary, "large-v3", "medium")
-    return tuple(name for name in priority if name in names) + tuple(
+    # The preferred name is evaluated first when aliases share the same repo.
+    priority = ("large-v3-turbo", "large-v3", "medium")
+    ordered = tuple(name for name in priority if name in names) + tuple(
         name for name in names if name not in priority
     )
+    visible: list[str] = []
+    seen_repositories: set[str] = set()
+    for name in ordered:
+        if model_repositories is None:
+            repository = _KNOWN_MODEL_ALIASES.get(name, name)
+        else:
+            repository = str(model_repositories.get(name, name))
+        if repository in seen_repositories:
+            continue
+        seen_repositories.add(repository)
+        visible.append(name)
+    return tuple(visible)
 
+
+def asr_model_aliases() -> dict[str, str]:
+    """Map hidden aliases onto their visible choice without changing the model."""
+    try:
+        from faster_whisper.utils import _MODELS as model_repositories
+    except ImportError:
+        model_repositories = {
+            name: _KNOWN_MODEL_ALIASES.get(name, name)
+            for name in _FALLBACK_MODEL_ORDER
+        }
+    names = tuple(str(name) for name in model_repositories)
+    visible = order_asr_models(names, model_repositories)
+    canonical_by_repo = {
+        str(model_repositories[name]): name for name in visible
+    }
+    return {
+        name: canonical_by_repo[str(repo)]
+        for name, repo in model_repositories.items()
+        if str(repo) in canonical_by_repo and canonical_by_repo[str(repo)] != name
+    }
 
 _MODEL_DOWNLOAD_SIZE_LABELS = {
     "tiny": "约 70 MB",
@@ -213,6 +256,7 @@ def build_settings_context(services, request) -> dict[str, object]:
             name: asr_model_guidance(name)
             for name in available_asr_models()
         },
+        "asr_model_aliases": asr_model_aliases(),
     }
     context.update(build_model_settings_context(services, request))
     return context
@@ -286,7 +330,7 @@ def available_asr_models() -> tuple[str, ...]:
     names = {str(name).strip() for name in model_repositories if str(name).strip()}
     ordered = [name for name in _FALLBACK_MODEL_ORDER if name in names]
     ordered.extend(sorted(names.difference(ordered)))
-    return order_asr_models(tuple(ordered) or _FALLBACK_MODEL_ORDER)
+    return order_asr_models(tuple(ordered) or _FALLBACK_MODEL_ORDER, model_repositories)
 
 
 def resolve_auto_device() -> str:
