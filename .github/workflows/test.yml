@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install validation dependencies
-        run: python -m pip install packaging
+        run: python -m pip install packaging jinja2
       - name: Validate manifest
         shell: python
         run: |
@@ -36,7 +36,7 @@ jobs:
           ]
           assert SpecifierSet(data["app_requires"]).contains(Version("0.2.0.dev0"), prereleases=True)
       - name: Check Python syntax
-        run: python -m compileall -q __init__.py plugin.py engine.py environment.py errors.py routes.py services.py worker.py scripts/build_registry_artifact.py
+        run: python -m compileall -q __init__.py plugin.py engine.py environment.py errors.py routes.py services.py worker.py scripts/build_registry_artifact.py tests
       - name: Check external Worker imports
         shell: bash
         run: |
@@ -49,6 +49,14 @@ jobs:
             exit 1
           fi
           grep -F 'from .engine import LocalTranscriptionService' worker.py
+      - name: Run model guidance tests
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python - <<'PY'
+          from pathlib import Path
+          from jinja2 import Environment
+          Environment().parse(Path('templates/transcription_settings.html').read_text(encoding='utf-8'))
+          PY
       - name: Smoke-build Registry v1 artifact
         shell: bash
         run: |
